@@ -1,0 +1,160 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+enum Provider {
+  META
+  LINKEDIN
+}
+
+enum ChannelType {
+  FB_PAGE
+  IG_BUSINESS
+  LI_ORG
+  LI_PROFILE
+}
+
+enum PostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+enum MediaType {
+  IMAGE
+}
+
+enum LogLevel {
+  INFO
+  WARN
+  ERROR
+}
+
+model Workspace {
+  id        String     @id @default(cuid())
+  name      String
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  users     User[]
+  channels  Channel[]
+  posts     Post[]
+  events    EventLog[]
+}
+
+model User {
+  id                    String        @id @default(cuid())
+  email                 String        @unique
+  passwordHash          String
+  name                  String?
+  role                  Role          @default(EDITOR)
+  workspace             Workspace     @relation(fields: [workspaceId], references: [id])
+  workspaceId           String
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  posts                 Post[]        @relation("author")
+  editedPosts           Post[]        @relation("lastEditor")
+  cancelledPostChannels PostChannel[] @relation("cancelledBy")
+}
+
+model Channel {
+  id                    String        @id @default(cuid())
+  workspace             Workspace     @relation(fields: [workspaceId], references: [id])
+  workspaceId           String
+  provider              Provider
+  type                  ChannelType
+  name                  String
+  externalId            String?
+  tokenEncrypted        String?
+  refreshTokenEncrypted String?
+  expiresAt             DateTime?
+  metadataJson          String?       @db.Text
+  connected             Boolean       @default(true)
+  needsReconnect        Boolean       @default(false)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  postChannels          PostChannel[]
+  events                EventLog[]
+}
+
+model Post {
+  id             String        @id @default(cuid())
+  workspace      Workspace     @relation(fields: [workspaceId], references: [id])
+  workspaceId    String
+  author         User          @relation("author", fields: [authorId], references: [id])
+  authorId       String
+  lastEditor     User?         @relation("lastEditor", fields: [lastEditorId], references: [id])
+  lastEditorId   String?
+  text           String        @db.Text
+  statusGlobal   PostStatus    @default(DRAFT)
+  scheduledAtUtc DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  media          PostMedia[]
+  postChannels   PostChannel[]
+  events         EventLog[]
+}
+
+model PostMedia {
+  id        String    @id @default(cuid())
+  post      Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  postId    String
+  url       String
+  type      MediaType @default(IMAGE)
+  order     Int       @default(0)
+  filename  String?
+  mimeType  String?
+  sizeBytes Int?
+  createdAt DateTime  @default(now())
+}
+
+model PostChannel {
+  id             String     @id @default(cuid())
+  post           Post       @relation(fields: [postId], references: [id], onDelete: Cascade)
+  postId         String
+  channel        Channel    @relation(fields: [channelId], references: [id])
+  channelId      String
+  status         PostStatus @default(DRAFT)
+  externalPostId String?
+  lastError      String?    @db.Text
+  publishedAtUtc DateTime?
+  cancelledBy    User?      @relation("cancelledBy", fields: [cancelledById], references: [id])
+  cancelledById  String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([postId, channelId])
+}
+
+model EventLog {
+  id          String    @id @default(cuid())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  workspaceId String
+  post        Post?     @relation(fields: [postId], references: [id])
+  postId      String?
+  channel     Channel?  @relation(fields: [channelId], references: [id])
+  channelId   String?
+  level       LogLevel  @default(INFO)
+  action      String
+  message     String    @db.Text
+  detailsJson String?   @db.Text
+  userId      String?
+  requestId   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([postId])
+}
