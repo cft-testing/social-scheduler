@@ -21,7 +21,7 @@ declare module "next-auth" {
   }
 }
 
-declare module "next-auth" {
+declare module "next-auth/jwt" {
   interface JWT {
     id: string;
     role: string;
@@ -30,6 +30,7 @@ declare module "next-auth" {
 }
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  trustHost: true,
   providers: [
     Credentials({
       name: "credentials",
@@ -38,7 +39,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        const parsed = loginSchema.safeParse(credentials);
+        if (!credentials) return null;
+
+        const parsed = loginSchema.safeParse({
+          email: String(credentials.email ?? ""),
+          password: String(credentials.password ?? ""),
+        });
         if (!parsed.success) return null;
 
         const user = await prisma.user.findUnique({
