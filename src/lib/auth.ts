@@ -78,7 +78,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           };
         } catch (err) {
           console.error("[AUTH] Database error during login:", err);
-          throw new Error("DATABASE_ERROR");
+          return null;
         }
       },
     }),
