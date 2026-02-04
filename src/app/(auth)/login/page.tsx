@@ -20,6 +20,15 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      // Check DB connectivity first
+      const health = await fetch("/api/health").catch(() => null);
+      if (!health || !health.ok) {
+        const data = await health?.json().catch(() => ({}));
+        setError("Erro de ligação à base de dados. Verifique as configurações do servidor.");
+        console.error("Health check failed:", data);
+        return;
+      }
+
       const formData = new FormData(e.currentTarget);
       const result = await signIn("credentials", {
         email: formData.get("email") as string,
