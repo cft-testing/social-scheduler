@@ -5,10 +5,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
 import { formatDateTime } from "@/lib/utils";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 export default async function DashboardPage() {
   const session = await auth();
-  const workspaceId = session!.user.workspaceId;
+  if (!session?.user) {
+    redirect("/login");
+  }
+  const workspaceId = session.user.workspaceId;
 
   const [totalPosts, scheduled, published, failed, recentPosts, upcomingPosts] =
     await Promise.all([

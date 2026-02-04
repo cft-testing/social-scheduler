@@ -46,7 +46,12 @@ export async function POST(req: NextRequest) {
   const { session, error } = await requireAuthApi();
   if (error) return error;
 
-  const body = await req.json();
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+  }
   const parsed = createPostSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(

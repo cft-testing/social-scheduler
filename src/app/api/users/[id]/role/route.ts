@@ -12,12 +12,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "Não pode alterar a sua própria função" }, { status: 400 });
   }
 
-  const body = await req.json();
-  const { role } = body;
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+  }
+  const role = body.role as string | undefined;
 
-  if (!role || !Object.values(Role).includes(role)) {
+  if (!role || !Object.values(Role).includes(role as Role)) {
     return NextResponse.json({ error: "Função inválida" }, { status: 400 });
   }
+
+  const validRole = role as Role;
 
   const user = await prisma.user.findFirst({
     where: { id, workspaceId: session!.user.workspaceId },
@@ -29,7 +36,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const updated = await prisma.user.update({
     where: { id },
-    data: { role },
+    data: { role: validRole },
     select: { id: true, email: true, name: true, role: true },
   });
 

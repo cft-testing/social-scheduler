@@ -16,16 +16,18 @@ interface UserItem {
 export function UserManagement({ currentUserId }: { currentUserId: string }) {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/users")
       .then((r) => r.json())
       .then((data) => setUsers(data.users || []))
-      .catch(() => {})
+      .catch(() => setError("Erro ao carregar utilizadores"))
       .finally(() => setLoading(false));
   }, []);
 
   async function handleRoleChange(userId: string, newRole: string) {
+    setError(null);
     const res = await fetch(`/api/users/${userId}/role`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -35,14 +37,19 @@ export function UserManagement({ currentUserId }: { currentUserId: string }) {
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u))
       );
+    } else {
+      setError("Erro ao alterar a função do utilizador");
     }
   }
 
   async function handleDelete(userId: string) {
     if (!confirm("Tem a certeza que pretende eliminar este utilizador?")) return;
+    setError(null);
     const res = await fetch(`/api/users/${userId}`, { method: "DELETE" });
     if (res.ok) {
       setUsers((prev) => prev.filter((u) => u.id !== userId));
+    } else {
+      setError("Erro ao eliminar utilizador");
     }
   }
 
@@ -52,6 +59,9 @@ export function UserManagement({ currentUserId }: { currentUserId: string }) {
         <CardTitle>Gestão de Utilizadores</CardTitle>
       </CardHeader>
       <CardContent>
+        {error && (
+          <p className="mb-3 text-sm text-red-600">{error}</p>
+        )}
         {loading ? (
           <p className="text-sm text-gray-500">A carregar...</p>
         ) : users.length === 0 ? (

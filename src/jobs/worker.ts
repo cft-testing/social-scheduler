@@ -1,11 +1,10 @@
 import { Worker, Job } from "bullmq";
 import IORedis from "ioredis";
-import { PrismaClient, PostStatus } from "@prisma/client";
-import { getAdapter } from "../lib/adapters";
-import { decrypt } from "../lib/crypto";
-import { logEvent } from "../lib/logger";
-
-const prisma = new PrismaClient();
+import { PostStatus } from "@prisma/client";
+import { getAdapter } from "@/lib/adapters";
+import { decrypt } from "@/lib/crypto";
+import { logEvent } from "@/lib/logger";
+import { prisma } from "@/lib/db";
 const connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
   maxRetriesPerRequest: null,
 });
@@ -85,8 +84,29 @@ async function processPublishJob(job: Job<{ postChannelId: string }>) {
   if (postChannel.channel.tokenEncrypted) {
     try {
       accessToken = decrypt(postChannel.channel.tokenEncrypted);
-    } catch {
-      accessToken = "";
+    } catch (err) {
+      console.error(`Failed to decrypt token for channel ${postChannel.channelId}:`, err);
+      await prisma.postChannel.update({
+        where: { id: postChannelId },
+        data: {
+          status: PostStatus.FAILED,
+          lastError: "Falha ao desencriptar token do canal. Reconecte o canal.",
+        },
+      });
+      await prisma.channel.update({
+        where: { id: postChannel.channelId },
+        data: { needsReconnect: true },
+      });
+      await logEvent({
+        workspaceId: postChannel.channel.workspaceId,
+        postId: postChannel.postId,
+        channelId: postChannel.channelId,
+        level: "ERROR",
+        action: "publish.decrypt_failed",
+        message: "Falha ao desencriptar token de acesso do canal",
+      });
+      await updateGlobalStatus(postChannel.postId);
+      return;
     }
   }
 
