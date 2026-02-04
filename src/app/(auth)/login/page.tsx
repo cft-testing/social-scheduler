@@ -19,20 +19,25 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
 
-    const formData = new FormData(e.currentTarget);
-    const result = await signIn("credentials", {
-      email: formData.get("email") as string,
-      password: formData.get("password") as string,
-      redirect: false,
-    });
+    try {
+      const formData = new FormData(e.currentTarget);
+      const result = await signIn("credentials", {
+        email: formData.get("email") as string,
+        password: formData.get("password") as string,
+        redirect: false,
+      });
 
-    setLoading(false);
-
-    if (result?.error) {
-      setError("Email ou password incorretos");
-    } else {
-      router.push("/dashboard");
-      router.refresh();
+      if (result?.error) {
+        setError("Email ou password incorretos");
+      } else {
+        router.push("/dashboard");
+        router.refresh();
+      }
+    } catch (err) {
+      setError("Erro de rede. Verifique a sua conexão.");
+      console.error("Login error:", err);
+    } finally {
+      setLoading(false);
     }
   }
 

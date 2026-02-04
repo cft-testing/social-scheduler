@@ -18,26 +18,31 @@ export default function RegisterPage() {
     setError("");
     setLoading(true);
 
-    const formData = new FormData(e.currentTarget);
-    const res = await fetch("/api/auth/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: formData.get("email"),
-        password: formData.get("password"),
-        name: formData.get("name"),
-      }),
-    });
+    try {
+      const formData = new FormData(e.currentTarget);
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: formData.get("email"),
+          password: formData.get("password"),
+          name: formData.get("name"),
+        }),
+      });
 
-    setLoading(false);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || `Erro ao registar (${res.status})`);
+        return;
+      }
 
-    if (!res.ok) {
-      const data = await res.json();
-      setError(data.error || "Erro ao registar");
-      return;
+      router.push("/login");
+    } catch (err) {
+      setError("Erro de rede. Verifique a sua conexão.");
+      console.error("Register error:", err);
+    } finally {
+      setLoading(false);
     }
-
-    router.push("/login");
   }
 
   return (

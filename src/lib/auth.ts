@@ -39,29 +39,47 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        if (!credentials) return null;
+        if (!credentials) {
+          console.log("[AUTH] No credentials provided");
+          return null;
+        }
 
         const parsed = loginSchema.safeParse({
           email: String(credentials.email ?? ""),
           password: String(credentials.password ?? ""),
         });
-        if (!parsed.success) return null;
+        if (!parsed.success) {
+          console.log("[AUTH] Validation failed:", parsed.error.errors);
+          return null;
+        }
 
-        const user = await prisma.user.findUnique({
-          where: { email: parsed.data.email },
-        });
-        if (!user) return null;
+        try {
+          const user = await prisma.user.findUnique({
+            where: { email: parsed.data.email },
+          });
+          if (!user) {
+            console.log("[AUTH] User not found:", parsed.data.email);
+            return null;
+          }
 
-        const valid = await compare(parsed.data.password, user.passwordHash);
-        if (!valid) return null;
+          const valid = await compare(parsed.data.password, user.passwordHash);
+          if (!valid) {
+            console.log("[AUTH] Invalid password for:", parsed.data.email);
+            return null;
+          }
 
-        return {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-          workspaceId: user.workspaceId,
-        };
+          console.log("[AUTH] Login successful for:", parsed.data.email);
+          return {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+            workspaceId: user.workspaceId,
+          };
+        } catch (err) {
+          console.error("[AUTH] Database error during login:", err);
+          return null;
+        }
       },
     }),
   ],
