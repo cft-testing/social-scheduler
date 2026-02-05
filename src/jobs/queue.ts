@@ -1,9 +1,7 @@
 import { Queue } from "bullmq";
-import IORedis from "ioredis";
+import { getRedis } from "@/lib/redis";
 
-const connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
-  maxRetriesPerRequest: null,
-});
+const connection = getRedis();
 
 export const publishQueue = new Queue("publish", {
   connection,

@@ -53,28 +53,11 @@ export class MetaAdapter implements SocialAdapter {
   private async livePublish(post: AdapterPost, accessToken: string): Promise<PublishResult> {
     try {
       if (post.channelType === "FB_PAGE") {
-        // Facebook Page API skeleton
-        // const response = await fetch(
-        //   `https://graph.facebook.com/v19.0/${post.channelExternalId}/feed`,
-        //   {
-        //     method: "POST",
-        //     headers: { "Content-Type": "application/json" },
-        //     body: JSON.stringify({ message: post.text, access_token: accessToken }),
-        //   }
-        // );
-        // const data = await response.json();
-        // if (data.error) throw new Error(data.error.message);
-        // return { success: true, externalPostId: data.id };
-        void accessToken;
-        return { success: false, error: "Live Facebook publishing not yet implemented", errorCategory: "unknown" };
+        return this.publishToFacebookPage(post, accessToken);
       }
 
       if (post.channelType === "IG_BUSINESS") {
-        // Instagram Business API skeleton (Container + Publish flow)
-        // Step 1: Create media container
-        // Step 2: Publish container
-        void accessToken;
-        return { success: false, error: "Live Instagram publishing not yet implemented", errorCategory: "unknown" };
+        return this.publishToInstagram(post, accessToken);
       }
 
       return { success: false, error: `Unknown channel type: ${post.channelType}`, errorCategory: "validation" };
@@ -86,6 +69,187 @@ export class MetaAdapter implements SocialAdapter {
         errorCategory: this.categorizeError(message),
       };
     }
+  }
+
+  private async publishToFacebookPage(post: AdapterPost, accessToken: string): Promise<PublishResult> {
+    const pageId = post.channelExternalId;
+
+    if (post.mediaUrls.length === 0) {
+      // Text-only post
+      const response = await fetch(
+        `https://graph.facebook.com/v19.0/${pageId}/feed`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: post.text,
+            access_token: accessToken,
+          }),
+        }
+      );
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+      return { success: true, externalPostId: data.id };
+    }
+
+    if (post.mediaUrls.length === 1) {
+      // Single photo post
+      const response = await fetch(
+        `https://graph.facebook.com/v19.0/${pageId}/photos`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: post.mediaUrls[0],
+            caption: post.text,
+            access_token: accessToken,
+          }),
+        }
+      );
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+      return { success: true, externalPostId: data.post_id || data.id };
+    }
+
+    // Multiple photos - create unpublished photos, then post with attached_media
+    const photoIds = await Promise.all(
+      post.mediaUrls.map(async (url) => {
+        const res = await fetch(
+          `https://graph.facebook.com/v19.0/${pageId}/photos`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              url,
+              published: false,
+              access_token: accessToken,
+            }),
+          }
+        );
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message);
+        return data.id;
+      })
+    );
+
+    const attachedMedia = photoIds.map((id) => ({ media_fbid: id }));
+    const response = await fetch(
+      `https://graph.facebook.com/v19.0/${pageId}/feed`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: post.text,
+          attached_media: attachedMedia,
+          access_token: accessToken,
+        }),
+      }
+    );
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    return { success: true, externalPostId: data.id };
+  }
+
+  private async publishToInstagram(post: AdapterPost, accessToken: string): Promise<PublishResult> {
+    const igUserId = post.channelExternalId;
+
+    // Instagram requires at least one image
+    if (post.mediaUrls.length === 0) {
+      return {
+        success: false,
+        error: "Instagram requer pelo menos uma imagem",
+        errorCategory: "validation",
+      };
+    }
+
+    if (post.mediaUrls.length === 1) {
+      // Single image container
+      const containerRes = await fetch(
+        `https://graph.facebook.com/v19.0/${igUserId}/media`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image_url: post.mediaUrls[0],
+            caption: post.text,
+            access_token: accessToken,
+          }),
+        }
+      );
+      const containerData = await containerRes.json();
+      if (containerData.error) throw new Error(containerData.error.message);
+
+      // Publish the container
+      const publishRes = await fetch(
+        `https://graph.facebook.com/v19.0/${igUserId}/media_publish`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            creation_id: containerData.id,
+            access_token: accessToken,
+          }),
+        }
+      );
+      const publishData = await publishRes.json();
+      if (publishData.error) throw new Error(publishData.error.message);
+      return { success: true, externalPostId: publishData.id };
+    }
+
+    // Carousel (multiple images)
+    // Step 1: Create individual containers
+    const childContainers = await Promise.all(
+      post.mediaUrls.map(async (url) => {
+        const res = await fetch(
+          `https://graph.facebook.com/v19.0/${igUserId}/media`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              image_url: url,
+              is_carousel_item: true,
+              access_token: accessToken,
+            }),
+          }
+        );
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message);
+        return data.id;
+      })
+    );
+
+    // Step 2: Create carousel container
+    const carouselRes = await fetch(
+      `https://graph.facebook.com/v19.0/${igUserId}/media`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          media_type: "CAROUSEL",
+          children: childContainers,
+          caption: post.text,
+          access_token: accessToken,
+        }),
+      }
+    );
+    const carouselData = await carouselRes.json();
+    if (carouselData.error) throw new Error(carouselData.error.message);
+
+    // Step 3: Publish carousel
+    const publishRes = await fetch(
+      `https://graph.facebook.com/v19.0/${igUserId}/media_publish`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          creation_id: carouselData.id,
+          access_token: accessToken,
+        }),
+      }
+    );
+    const publishData = await publishRes.json();
+    if (publishData.error) throw new Error(publishData.error.message);
+    return { success: true, externalPostId: publishData.id };
   }
 
   private categorizeError(message: string): PublishResult["errorCategory"] {

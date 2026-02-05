@@ -5,6 +5,7 @@ import { getAdapter } from "@/lib/adapters";
 import { decrypt } from "@/lib/crypto";
 import { logEvent } from "@/lib/logger";
 import { prisma } from "@/lib/db";
+import { refreshChannelToken } from "@/lib/token-refresh";
 const connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
   maxRetriesPerRequest: null,
 });
@@ -79,13 +80,73 @@ async function processPublishJob(job: Job<{ postChannelId: string }>) {
     return;
   }
 
+  // Check token expiry and refresh if needed
+  let channel = postChannel.channel;
+  if (channel.expiresAt) {
+    const hoursUntilExpiry = (channel.expiresAt.getTime() - Date.now()) / (1000 * 60 * 60);
+
+    if (hoursUntilExpiry < 24) {
+      console.log(`Token for channel ${channel.id} expires in ${hoursUntilExpiry.toFixed(1)} hours, attempting refresh...`);
+      const refreshResult = await refreshChannelToken(channel);
+
+      if (refreshResult.success) {
+        // Refetch channel with updated token
+        const updatedChannel = await prisma.channel.findUnique({
+          where: { id: channel.id },
+        });
+        if (updatedChannel) {
+          channel = updatedChannel;
+        }
+        await logEvent({
+          workspaceId: channel.workspaceId,
+          channelId: channel.id,
+          action: "token.refreshed",
+          message: "Token renovado automaticamente antes da publicação",
+        });
+      } else if (hoursUntilExpiry <= 0) {
+        // Token expired and refresh failed
+        await prisma.postChannel.update({
+          where: { id: postChannelId },
+          data: {
+            status: PostStatus.FAILED,
+            lastError: "Token expirado e renovação falhou. Reconecte o canal.",
+          },
+        });
+        await prisma.channel.update({
+          where: { id: channel.id },
+          data: { needsReconnect: true },
+        });
+        await logEvent({
+          workspaceId: channel.workspaceId,
+          postId: postChannel.postId,
+          channelId: channel.id,
+          level: "ERROR",
+          action: "token.expired",
+          message: `Token expirado e renovação falhou: ${refreshResult.error}`,
+        });
+        await updateGlobalStatus(postChannel.postId);
+        return;
+      } else {
+        // Refresh failed but token not yet expired - proceed with warning
+        console.warn(`Token refresh failed for channel ${channel.id}: ${refreshResult.error}`);
+        await logEvent({
+          workspaceId: channel.workspaceId,
+          channelId: channel.id,
+          level: "WARN",
+          action: "token.refresh_failed",
+          message: `Renovação de token falhou: ${refreshResult.error}`,
+        });
+      }
+    }
+  }
+
   // Decrypt access token
   let accessToken = "";
-  if (postChannel.channel.tokenEncrypted) {
+  if (channel.tokenEncrypted) {
     try {
-      accessToken = decrypt(postChannel.channel.tokenEncrypted);
+      accessToken = decrypt(channel.tokenEncrypted);
     } catch (err) {
-      console.error(`Failed to decrypt token for channel ${postChannel.channelId}:`, err);
+      console.error(`Failed to decrypt token for channel ${channel.id}:`, err);
       await prisma.postChannel.update({
         where: { id: postChannelId },
         data: {
@@ -94,13 +155,13 @@ async function processPublishJob(job: Job<{ postChannelId: string }>) {
         },
       });
       await prisma.channel.update({
-        where: { id: postChannel.channelId },
+        where: { id: channel.id },
         data: { needsReconnect: true },
       });
       await logEvent({
-        workspaceId: postChannel.channel.workspaceId,
+        workspaceId: channel.workspaceId,
         postId: postChannel.postId,
-        channelId: postChannel.channelId,
+        channelId: channel.id,
         level: "ERROR",
         action: "publish.decrypt_failed",
         message: "Falha ao desencriptar token de acesso do canal",
@@ -115,8 +176,8 @@ async function processPublishJob(job: Job<{ postChannelId: string }>) {
     {
       text: postChannel.post.text,
       mediaUrls: postChannel.post.media.map((m) => m.url),
-      channelExternalId: postChannel.channel.externalId || "",
-      channelType: postChannel.channel.type,
+      channelExternalId: channel.externalId || "",
+      channelType: channel.type,
     },
     accessToken
   );

@@ -50,35 +50,10 @@ export class LinkedInAdapter implements SocialAdapter {
 
   private async livePublish(post: AdapterPost, accessToken: string): Promise<PublishResult> {
     try {
-      // LinkedIn UGC Post API skeleton
-      // const author = post.channelType === "LI_ORG"
-      //   ? `urn:li:organization:${post.channelExternalId}`
-      //   : `urn:li:person:${post.channelExternalId}`;
-      //
-      // const response = await fetch("https://api.linkedin.com/v2/ugcPosts", {
-      //   method: "POST",
-      //   headers: {
-      //     Authorization: `Bearer ${accessToken}`,
-      //     "Content-Type": "application/json",
-      //     "X-Restli-Protocol-Version": "2.0.0",
-      //   },
-      //   body: JSON.stringify({
-      //     author,
-      //     lifecycleState: "PUBLISHED",
-      //     specificContent: {
-      //       "com.linkedin.ugc.ShareContent": {
-      //         shareCommentary: { text: post.text },
-      //         shareMediaCategory: "NONE",
-      //       },
-      //     },
-      //     visibility: { "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC" },
-      //   }),
-      // });
-      // const data = await response.json();
-      // return { success: true, externalPostId: data.id };
-
-      void accessToken;
-      return { success: false, error: "Live LinkedIn publishing not yet implemented", errorCategory: "unknown" };
+      if (post.mediaUrls.length === 0) {
+        return this.publishTextPost(post, accessToken);
+      }
+      return this.publishWithImages(post, accessToken);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {
@@ -87,6 +62,147 @@ export class LinkedInAdapter implements SocialAdapter {
         errorCategory: this.categorizeError(message),
       };
     }
+  }
+
+  private getAuthorUrn(post: AdapterPost): string {
+    return post.channelType === "LI_ORG"
+      ? `urn:li:organization:${post.channelExternalId}`
+      : `urn:li:person:${post.channelExternalId}`;
+  }
+
+  private async publishTextPost(post: AdapterPost, accessToken: string): Promise<PublishResult> {
+    const author = this.getAuthorUrn(post);
+
+    const response = await fetch("https://api.linkedin.com/v2/ugcPosts", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-Restli-Protocol-Version": "2.0.0",
+      },
+      body: JSON.stringify({
+        author,
+        lifecycleState: "PUBLISHED",
+        specificContent: {
+          "com.linkedin.ugc.ShareContent": {
+            shareCommentary: { text: post.text },
+            shareMediaCategory: "NONE",
+          },
+        },
+        visibility: {
+          "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC",
+        },
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || JSON.stringify(data));
+    }
+    return { success: true, externalPostId: data.id };
+  }
+
+  private async publishWithImages(post: AdapterPost, accessToken: string): Promise<PublishResult> {
+    const author = this.getAuthorUrn(post);
+    const mediaAssets: string[] = [];
+
+    // Upload each image
+    for (const imageUrl of post.mediaUrls) {
+      // Step 1: Register upload
+      const registerRes = await fetch(
+        "https://api.linkedin.com/v2/assets?action=registerUpload",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            registerUploadRequest: {
+              recipes: ["urn:li:digitalmediaRecipe:feedshare-image"],
+              owner: author,
+              serviceRelationships: [
+                {
+                  relationshipType: "OWNER",
+                  identifier: "urn:li:userGeneratedContent",
+                },
+              ],
+            },
+          }),
+        }
+      );
+
+      const registerData = await registerRes.json();
+      if (!registerRes.ok) {
+        throw new Error(registerData.message || "Failed to register upload");
+      }
+
+      const uploadUrl =
+        registerData.value.uploadMechanism[
+          "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"
+        ].uploadUrl;
+      const asset = registerData.value.asset;
+
+      // Step 2: Fetch image and upload binary
+      const imageResponse = await fetch(imageUrl);
+      if (!imageResponse.ok) {
+        throw new Error(`Failed to fetch image: ${imageUrl}`);
+      }
+      const imageBuffer = await imageResponse.arrayBuffer();
+
+      // Detect content type
+      const contentType = imageResponse.headers.get("content-type") || "image/jpeg";
+
+      const uploadRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": contentType,
+        },
+        body: imageBuffer,
+      });
+
+      if (!uploadRes.ok) {
+        throw new Error("Failed to upload image to LinkedIn");
+      }
+
+      mediaAssets.push(asset);
+    }
+
+    // Step 3: Create post with media assets
+    const shareMedia = mediaAssets.map((asset) => ({
+      status: "READY",
+      media: asset,
+    }));
+
+    const response = await fetch("https://api.linkedin.com/v2/ugcPosts", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-Restli-Protocol-Version": "2.0.0",
+      },
+      body: JSON.stringify({
+        author,
+        lifecycleState: "PUBLISHED",
+        specificContent: {
+          "com.linkedin.ugc.ShareContent": {
+            shareCommentary: { text: post.text },
+            shareMediaCategory: "IMAGE",
+            media: shareMedia,
+          },
+        },
+        visibility: {
+          "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC",
+        },
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || JSON.stringify(data));
+    }
+    return { success: true, externalPostId: data.id };
   }
 
   private categorizeError(message: string): PublishResult["errorCategory"] {
